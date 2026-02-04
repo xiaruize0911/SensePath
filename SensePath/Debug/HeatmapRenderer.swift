@@ -15,39 +15,47 @@ class HeatmapRenderer {
     private let colorFilter = CIFilter.colorMatrix()
     
     /// 将深度 CVPixelBuffer 转换为热力图 UIImage
-    /// - Parameters:
-    ///   - depthBuffer: 深度图（Float32）
-    ///   - minDistance: 映射最小值（米）
-    ///   - maxDistance: 映射最大值（米）
     func render(depthBuffer: CVPixelBuffer, minDistance: Float, maxDistance: Float) -> UIImage? {
         // 1. 创建 CIImage
         let ciImage = CIImage(cvPixelBuffer: depthBuffer)
         
-        // 2. 映射范围：将 [min, max] 映射到 [0, 1]
-        // 这里通过色彩矩阵简单模拟：近处(红色) -> 远处(蓝色)
-        // 实际上完整的热力图通常使用自定义 Metal Shader 或 CIColorCube
+        // 2. 映射逻辑优化：使用 CIColorPolynomial 来处理 0 (无效/太远)
+        // 我们希望 d=0 时不显示红色。
+        // 多项式公式: r = a0 + a1*d + a2*d^2 + a3*d^3
+        // 我们设 a0 = 0, 这样 d=0 时 r=0 (不显示红色)
+        // 我们设 a1 = 2.0, a2 = -0.5, 这样在 1m 左右 R 达到峰值，在 4m 左右归零
         
-        // 简单映射逻辑：
-        // 深度越大 -> 蓝色越强
-        // 深度越小 -> 红色越强
+        let polyFilter = CIFilter.colorPolynomial()
+        polyFilter.inputImage = ciImage
         
-        // 我们这里使用一个简单的卷积或者色彩映射滤镜
-        // 注意：深度图是单通道 Float32
+        // R 通道: 处理危险区 (0.5m - 2.0m)
+        // a0=0, a1=2.5, a2=-1.0 (在 1.25m 处达到峰值)
+        polyFilter.redCoefficients = CIVector(x: 0, y: 2.5, z: -1.0, w: 0)
         
-        let range = maxDistance - minDistance
+        // G 通道: 保持黑色
+        polyFilter.greenCoefficients = CIVector(x: 0, y: 0, z: 0, w: 0)
         
-        // 使用 CIColorMatrix 调整通道（简单近似）
-        let filter = CIFilter.colorMatrix()
-        filter.inputImage = ciImage
-        // 将红色通道设为 1/depth（反比），蓝色通道设为 depth
-        filter.rVector = CIVector(x: -1.0 / CGFloat(range), y: 0, z: 0, w: 1.0)
-        filter.bVector = CIVector(x: 1.0 / CGFloat(range), y: 0, z: 0, w: 0)
+        // B 通道: 随距离增加 (安全区)
+        // a0=0, a1=0.2, a2=0.05
+        polyFilter.blueCoefficients = CIVector(x: 0, y: 0.2, z: 0.05, w: 0)
         
-        guard let outputImage = filter.outputImage,
-              let cgImage = context.createCGImage(outputImage, from: outputImage.extent) else {
+        // A 通道: 保持不透明
+        polyFilter.alphaCoefficients = CIVector(x: 1, y: 0, z: 0, w: 0)
+        
+        guard let outputImage = polyFilter.outputImage,
+              let cgImage = context.createCGImage(outputImage, from: ciImage.extent) else {
             return nil
         }
         
+        return UIImage(cgImage: cgImage)
+    }
+    
+    /// 将普通采集 PixelBuffer 转换为 UIImage
+    func convert(pixelBuffer: CVPixelBuffer) -> UIImage? {
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            return nil
+        }
         return UIImage(cgImage: cgImage)
     }
 }

@@ -27,65 +27,87 @@ struct ContentView: View {
                     .ignoresSafeArea()
                     .animation(.easeInOut(duration: 0.3), value: viewModel.currentState)
                 
-                VStack(spacing: 30) {
-                    
-                    // 标题
-                    Text("SensePath")
-                        .font(.system(size: 48, weight: .bold, design: .rounded))
-                        .foregroundColor(.white)
-                        .accessibilityAddTraits(.isHeader)
-                    
-                    Text("声路")
-                        .font(.system(size: 24, weight: .medium))
-                        .foregroundColor(.white.opacity(0.9))
-                    
-                    Spacer()
-                    
-                    // 状态显示
-                    StateIndicatorView(
-                        state: viewModel.currentState,
-                        urgency: viewModel.urgency
-                    )
-                    
-                    // 主按钮
-                    MainControlButton(
-                        isRunning: viewModel.isRunning,
-                        action: {
-                            if viewModel.isRunning {
-                                viewModel.stop()
-                            } else {
-                                viewModel.start()
-                            }
+                ScrollView {
+                    VStack(spacing: 20) {
+                        
+                        // 标题
+                        VStack(spacing: 4) {
+                            Text("SensePath")
+                                .font(.system(size: 40, weight: .bold, design: .rounded))
+                                .foregroundColor(.white)
+                            
+                            Text("声路")
+                                .font(.system(size: 18, weight: .medium))
+                                .foregroundColor(.white.opacity(0.8))
                         }
-                    )
-                    
-                    // FPS 指示
-                    if viewModel.isRunning {
-                        Text("FPS: \(Int(viewModel.fps))")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundColor(.white.opacity(0.7))
-                            .accessibilityLabel("帧率 \(Int(viewModel.fps))")
-                    }
-                    
-                    // 调试信息
-                    if settings.showMetrics && viewModel.isRunning {
-                        MetricsView(
-                            left: viewModel.leftDistance,
-                            center: viewModel.centerDistance,
-                            right: viewModel.rightDistance,
-                            invalidRatio: viewModel.invalidRatio,
-                            stability: viewModel.stability
+                        .padding(.top, 20)
+                        .accessibilityAddTraits(.isHeader)
+                        
+                        // 状态显示
+                        StateIndicatorView(
+                            state: viewModel.currentState,
+                            urgency: viewModel.urgency
                         )
+                        .frame(height: 180)
+                        
+                        // 主按钮
+                        MainControlButton(
+                            isRunning: viewModel.isRunning,
+                            action: {
+                                if viewModel.isRunning {
+                                    viewModel.stop()
+                                } else {
+                                    viewModel.start()
+                                }
+                            }
+                        )
+                        
+                        // FPS 指示
+                        if viewModel.isRunning {
+                            Text("FPS: \(Int(viewModel.fps))")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(.white.opacity(0.7))
+                        }
+                        
+                        // 调试图
+                        if settings.showMetrics && viewModel.isRunning {
+                            VStack(spacing: 12) {
+                                HStack(spacing: 10) {
+                                    if let original = viewModel.originalImage {
+                                        DebugImageView(image: original, label: "原始图像")
+                                    } else {
+                                        placeholderView("等待画面...")
+                                    }
+                                    
+                                    if let heatmap = viewModel.heatmapImage {
+                                        DebugImageView(image: heatmap, label: "深度热力图")
+                                    } else {
+                                        placeholderView("等待深度...")
+                                    }
+                                }
+                                
+                                MetricsView(
+                                    left: viewModel.leftDistance,
+                                    center: viewModel.centerDistance,
+                                    right: viewModel.rightDistance,
+                                    invalidRatio: viewModel.invalidRatio,
+                                    stability: viewModel.stability
+                                )
+                            }
+                            .padding()
+                            .background(Color.white.opacity(0.1))
+                            .cornerRadius(16)
+                        }
+                        
+                        // 错误提示
+                        if let error = viewModel.errorMessage {
+                            ErrorBanner(message: error)
+                        }
+                        
+                        Spacer(minLength: 50)
                     }
-                    
-                    Spacer()
-                    
-                    // 错误提示
-                    if let error = viewModel.errorMessage {
-                        ErrorBanner(message: error)
-                    }
+                    .padding()
                 }
-                .padding()
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -181,6 +203,50 @@ struct MainControlButton: View {
         .accessibilityLabel(isRunning ? "停止避障" : "开始避障")
         .accessibilityHint(isRunning ? "点击停止实时避障检测" : "点击开始实时避障检测")
         .accessibilityAddTraits(.isButton)
+    }
+}
+
+// MARK: - Debug Image View
+
+struct DebugImageView: View {
+    let image: UIImage
+    let label: String
+    
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(width: 150, height: 200)
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                )
+            
+            Text(label)
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(.white.opacity(0.7))
+        }
+        .accessibilityLabel(label)
+    }
+}
+
+func placeholderView(_ text: String) -> some View {
+    VStack(spacing: 4) {
+        Rectangle()
+            .fill(Color.black.opacity(0.2))
+            .frame(width: 150, height: 200)
+            .cornerRadius(8)
+            .overlay(
+                Text(text)
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.5))
+            )
+        
+        Text("加载中")
+            .font(.system(size: 10, weight: .bold))
+            .foregroundColor(.white.opacity(0.7))
     }
 }
 

@@ -8,6 +8,7 @@
 import Foundation
 import AVFoundation
 import Combine
+import UIKit
 
 class SensePathViewModel: ObservableObject {
     
@@ -19,6 +20,8 @@ class SensePathViewModel: ObservableObject {
     @Published var debugInfo: String = ""
     @Published var errorMessage: String?
     @Published var fps: Double = 0
+    @Published var heatmapImage: UIImage? = nil
+    @Published var originalImage: UIImage? = nil
     
     // 详细指标（调试用）
     @Published var leftDistance: Float = 0
@@ -34,6 +37,7 @@ class SensePathViewModel: ObservableObject {
     private let captureManager = DepthCaptureManager()
     private var analyzer: DepthAnalyzer
     private var stateMachine: GuidanceStateMachine
+    private let heatmapRenderer = HeatmapRenderer()
     
     private let hapticsManager = HapticsManager()
     private let audioManager = AudioCueManager()
@@ -159,14 +163,29 @@ class SensePathViewModel: ObservableObject {
     
     // MARK: - Processing Pipeline
     
-    private func processDepth(_ depthData: AVDepthData) {
+    private func processFrame(depthData: AVDepthData, sampleBuffer: CMSampleBuffer) {
         // 1. 分析深度
         let (sectorDepth, quality) = analyzer.analyze(depthData: depthData, fps: captureManager.currentFPS)
         
         // 2. 更新状态机
         let guidance = stateMachine.update(sectorDepth: sectorDepth, quality: quality)
         
-        // 3. 更新 UI（主线程）
+        // 3. 渲染调试图（如果需要）
+        var heatmap: UIImage? = nil
+        var original: UIImage? = nil
+        if settings.showMetrics {
+            heatmap = heatmapRenderer.render(
+                depthBuffer: depthData.depthDataMap,
+                minDistance: 0.5,
+                maxDistance: 4.0
+            )
+            
+            if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+                original = heatmapRenderer.convert(pixelBuffer: pixelBuffer)
+            }
+        }
+        
+        // 4. 更新 UI（主线程）
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             
@@ -174,6 +193,8 @@ class SensePathViewModel: ObservableObject {
             self.urgency = guidance.urgency
             self.debugInfo = guidance.debugInfo
             self.fps = quality.fps
+            self.heatmapImage = heatmap
+            self.originalImage = original
             
             // 详细指标
             if self.settings.showMetrics {
@@ -185,11 +206,11 @@ class SensePathViewModel: ObservableObject {
             }
         }
         
-        // 4. 输出触觉
+        // 5. 输出触觉
         let hapticPattern = mapToHapticPattern(state: guidance.state, urgency: guidance.urgency)
         hapticsManager.playPattern(hapticPattern)
         
-        // 5. 语音（仅状态变化时）
+        // 6. 语音（仅状态变化时）
         if guidance.stateChanged, let message = guidance.message {
             handleStateChange(state: guidance.state, message: message)
         }
@@ -241,7 +262,7 @@ extension SensePathViewModel: DepthCaptureDelegate {
     func depthCaptureManager(_ manager: DepthCaptureManager,
                             didOutput depthData: AVDepthData,
                             sampleBuffer: CMSampleBuffer) {
-        processDepth(depthData)
+        processFrame(depthData: depthData, sampleBuffer: sampleBuffer)
     }
     
     func depthCaptureManager(_ manager: DepthCaptureManager,

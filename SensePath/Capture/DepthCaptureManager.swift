@@ -210,6 +210,10 @@ class DepthCaptureManager: NSObject {
             videoConnection.isVideoMirrored = true
         }
         
+        if depthConnection.isVideoMirroringSupported {
+            depthConnection.isVideoMirrored = true
+        }
+        
         let synchronizer = AVCaptureDataOutputSynchronizer(
             dataOutputs: [videoDataOutput, depthDataOutput]
         )

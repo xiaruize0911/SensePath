@@ -129,10 +129,13 @@ class DepthAnalyzer {
         )
         
         // 9. 构造结果
+        // 如果某个扇区没有有效深度值（d.isFinite 为 false），
+        // 说明该区域太远、没有障碍物或者是全反射面，为了安全，我们将其设为一个较大的距离（10米）
+        // 这样状态机就会将其判定为“正常/安全”，而不是“距离为0/危险”
         let sectorDepth = SectorDepth(
-            left: dL.isFinite ? dL : 0,
-            center: smoothedDC.isFinite ? smoothedDC : 0,
-            right: dR.isFinite ? dR : 0,
+            left: dL.isFinite ? dL : 10.0,
+            center: smoothedDC.isFinite ? smoothedDC : 10.0,
+            right: dR.isFinite ? dR : 10.0,
             invalidRatio: invalidRatio,
             stability: stability
         )
