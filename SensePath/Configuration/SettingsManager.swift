@@ -104,6 +104,10 @@ class SettingsManager: ObservableObject {
         didSet { save() }
     }
     
+    @Published var remoteLogURL: String {
+        didSet { save() }
+    }
+    
     // MARK: Constants
     
     private enum Keys {
@@ -114,6 +118,7 @@ class SettingsManager: ObservableObject {
         static let debugMode = "debugMode"
         static let showMetrics = "showMetrics"
         static let enableLogging = "enableLogging"
+        static let remoteLogURL = "remoteLogURL"
     }
     
     private let defaults = UserDefaults.standard
@@ -142,6 +147,7 @@ class SettingsManager: ObservableObject {
         self.debugMode = defaults.bool(forKey: Keys.debugMode)
         self.showMetrics = defaults.bool(forKey: Keys.showMetrics)
         self.enableLogging = defaults.bool(forKey: Keys.enableLogging)
+        self.remoteLogURL = defaults.string(forKey: Keys.remoteLogURL) ?? "http://192.168.1.100:8080/log"
     }
     
     // MARK: Public Methods
@@ -154,6 +160,7 @@ class SettingsManager: ObservableObject {
         defaults.set(debugMode, forKey: Keys.debugMode)
         defaults.set(showMetrics, forKey: Keys.showMetrics)
         defaults.set(enableLogging, forKey: Keys.enableLogging)
+        defaults.set(remoteLogURL, forKey: Keys.remoteLogURL)
     }
     
     func reset() {

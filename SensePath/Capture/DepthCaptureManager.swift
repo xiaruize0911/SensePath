@@ -85,6 +85,25 @@ class DepthCaptureManager: NSObject {
     /// 启动采集
     func startCapture() throws {
         try sessionQueue.sync {
+            // 如果已经在运行，先彻底停止并清理
+            if self.session.isRunning {
+                self.session.stopRunning()
+            }
+            
+            // 清理旧资源，防止重用时状态不一致
+            self.outputSynchronizer = nil
+            
+            // 重新移除旧的输入输出以确保纯净状态
+            self.session.beginConfiguration()
+            for input in self.session.inputs {
+                self.session.removeInput(input)
+            }
+            for output in self.session.outputs {
+                self.session.removeOutput(output)
+            }
+            self.session.commitConfiguration()
+            
+            // 重新配置
             try self.setupSession()
             
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -98,12 +117,13 @@ class DepthCaptureManager: NSObject {
     
     /// 停止采集
     func stopCapture() {
-        sessionQueue.async { [weak self] in
-            guard let self = self else { return }
-            
+        sessionQueue.sync {
             if self.session.isRunning {
                 self.session.stopRunning()
             }
+            
+            // 彻底清理同步器，防止其持有的线程继续回调
+            self.outputSynchronizer = nil
             
             DispatchQueue.main.async {
                 self.isRunning = false

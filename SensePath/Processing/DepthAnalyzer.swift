@@ -61,14 +61,14 @@ struct AnalyzerConfig {
     let depthRange: ClosedRange<Float>
     
     static let `default` = AnalyzerConfig(
-        roiVerticalRange: 0.5...1.0,  // 画面下半部
-        percentile: 0.1,              // 10th percentile
-        smoothingAlpha: 0.3,          // 较强平滑
-        stabilityWindow: 20,          // 20 帧约 0.67 秒
-        invalidThreshold: 0.25,       // 25% 空洞
-        stabilityThreshold: 0.12,     // 12cm 抖动
-        minFPS: 20.0,
-        depthRange: 0.2...2.0         // TrueDepth 有效范围
+        roiVerticalRange: 0.4...0.9,  // 略微上移 ROI，避免拍到手部或地面过近处
+        percentile: 0.25,             // 提高分位数到 25%，显著降低对噪点和孤立像素的敏感度
+        smoothingAlpha: 0.2,          // 更强的平滑 (Alpha 越小越平滑)
+        stabilityWindow: 30,          // 增加窗口大小，增加平滑度
+        invalidThreshold: 0.45,       // 允许 45% 的空洞（通常是因为物体太远）
+        stabilityThreshold: 0.20,     // 允许 20cm 的抖动
+        minFPS: 15.0,
+        depthRange: 0.2...3.5         // 扩大检测范围到 3.5m
     )
 }
 
@@ -81,8 +81,14 @@ class DepthAnalyzer {
     var config: AnalyzerConfig
     
     // 平滑与稳定性追踪
+    private var leftDepthHistory: [Float] = []
     private var centerDepthHistory: [Float] = []
+    private var rightDepthHistory: [Float] = []
+    
+    private var smoothedLeftDepth: Float?
     private var smoothedCenterDepth: Float?
+    private var smoothedRightDepth: Float?
+    
     private var consecutiveInvalidFrames = 0
     
     // MARK: Initialization
@@ -107,14 +113,17 @@ class DepthAnalyzer {
         )
         
         // 4. 计算每个扇区的最近距离（分位数）
+        // 如果没有有效深度值，默认为无穷大
         let dL = percentile(of: leftValues, p: config.percentile) ?? Float.infinity
         let dC = percentile(of: centerValues, p: config.percentile) ?? Float.infinity
         let dR = percentile(of: rightValues, p: config.percentile) ?? Float.infinity
         
-        // 5. 平滑中心距离
-        let smoothedDC = smoothCenterDepth(dC)
+        // 5. 平滑所有扇区距离
+        let sL = smoothDepth(dL, &smoothedLeftDepth, &leftDepthHistory)
+        let sC = smoothDepth(dC, &smoothedCenterDepth, &centerDepthHistory)
+        let sR = smoothDepth(dR, &smoothedRightDepth, &rightDepthHistory)
         
-        // 6. 计算稳定性
+        // 6. 计算稳定性 (基于中心)
         let stability = calculateStability()
         
         // 7. 计算空洞率
@@ -129,13 +138,11 @@ class DepthAnalyzer {
         )
         
         // 9. 构造结果
-        // 如果某个扇区没有有效深度值（d.isFinite 为 false），
-        // 说明该区域太远、没有障碍物或者是全反射面，为了安全，我们将其设为一个较大的距离（10米）
-        // 这样状态机就会将其判定为“正常/安全”，而不是“距离为0/危险”
+        // 统一处理无穷大为 10.0m，避免状态机溢出
         let sectorDepth = SectorDepth(
-            left: dL.isFinite ? dL : 10.0,
-            center: smoothedDC.isFinite ? smoothedDC : 10.0,
-            right: dR.isFinite ? dR : 10.0,
+            left: sL.isFinite ? sL : 10.0,
+            center: sC.isFinite ? sC : 10.0,
+            right: sR.isFinite ? sR : 10.0,
             invalidRatio: invalidRatio,
             stability: stability
         )
@@ -145,25 +152,29 @@ class DepthAnalyzer {
     
     /// 重置状态
     func reset() {
+        leftDepthHistory.removeAll()
         centerDepthHistory.removeAll()
+        rightDepthHistory.removeAll()
+        
+        smoothedLeftDepth = nil
         smoothedCenterDepth = nil
+        smoothedRightDepth = nil
+        
         consecutiveInvalidFrames = 0
     }
     
     // MARK: - Private Methods
     
-    /// 转换深度数据为米制
+    /// 转换深度数据为米制并统一为 Float32 格式
     private func convertToMeters(depthData: AVDepthData) -> CVPixelBuffer {
         let depthType = depthData.depthDataType
         
-        // 如果已经是深度（米），直接返回
-        if depthType == kCVPixelFormatType_DepthFloat32 ||
-           depthType == kCVPixelFormatType_DepthFloat16 {
+        // 如果已经是 Float32 深度图，直接返回
+        if depthType == kCVPixelFormatType_DepthFloat32 {
             return depthData.depthDataMap
         }
         
-        // 否则从视差转换（disparity -> depth）
-        // depth = 1 / disparity
+        // 统一转换为 Float32 深度图 (Depth, 不是 Disparity)
         return depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32).depthDataMap
     }
     
@@ -244,24 +255,25 @@ class DepthAnalyzer {
         return sortedValues[clampedIndex]
     }
     
-    /// 平滑中心深度（EMA）
-    private func smoothCenterDepth(_ rawDC: Float) -> Float {
-        guard rawDC.isFinite else { return smoothedCenterDepth ?? 0 }
+    /// 通用平滑算法 (EMA)
+    private func smoothDepth(_ rawValue: Float, _ smoothedValue: inout Float?, _ history: inout [Float]) -> Float {
+        // 如果当前帧无效，尝试返回上一次的平滑值，如果没有上一次值则返回无穷大（表示远方）
+        guard rawValue.isFinite else { return smoothedValue ?? Float.infinity }
         
-        if let previous = smoothedCenterDepth {
+        if let previous = smoothedValue {
             let alpha = config.smoothingAlpha
-            smoothedCenterDepth = alpha * rawDC + (1 - alpha) * previous
+            smoothedValue = alpha * rawValue + (1 - alpha) * previous
         } else {
-            smoothedCenterDepth = rawDC
+            smoothedValue = rawValue
         }
         
-        // 更新历史记录
-        centerDepthHistory.append(smoothedCenterDepth!)
-        if centerDepthHistory.count > config.stabilityWindow {
-            centerDepthHistory.removeFirst()
+        // 更新历史记录（用于稳定性计算，主要关注中心扇区）
+        history.append(smoothedValue!)
+        if history.count > config.stabilityWindow {
+            history.removeFirst()
         }
         
-        return smoothedCenterDepth!
+        return smoothedValue!
     }
     
     /// 计算稳定性（标准差）

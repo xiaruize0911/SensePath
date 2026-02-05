@@ -59,8 +59,12 @@ class HapticsManager {
     func stop() {
         patternTimer?.invalidate()
         patternTimer = nil
+        currentPattern = .none
         
-        engine?.stop(completionHandler: { _ in })
+        // 停止引擎时使用 completion 取消运行标记
+        engine?.stop(completionHandler: { [weak self] _ in
+            self?.isEngineRunning = false
+        })
         isEngineRunning = false
     }
     
@@ -151,11 +155,10 @@ class HapticsManager {
         }
     }
     
-    /// 低可靠提示：低频长震
+    /// 低可靠提示：轻微震动一次，提示用户注意，不循环
     private func playLowConfidence() {
-        scheduleRepeating(interval: 1.5) { [weak self] in
-            self?.playContinuousImpact(duration: 0.5, intensity: 0.6, sharpness: 0.3)
-        }
+        patternTimer?.invalidate()
+        playContinuousImpact(duration: 0.2, intensity: 0.4, sharpness: 0.2)
     }
     
     // MARK: - Primitive Patterns

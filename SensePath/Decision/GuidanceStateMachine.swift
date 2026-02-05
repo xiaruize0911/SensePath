@@ -57,9 +57,9 @@ struct GuidanceThresholds {
     var hysteresis: Float       // 滞后带（米），避免左右抖动
     
     static let `default` = GuidanceThresholds(
-        stopDistance: 0.6,
-        warnDistance: 1.2,
-        hysteresis: 0.15
+        stopDistance: 0.5,      // 缩小停止距离
+        warnDistance: 1.0,      // 缩小警告范围，减少无端触发
+        hysteresis: 0.25        // 增加滞后带，减少状态频繁切换
     )
     
     static let conservative = GuidanceThresholds(
@@ -85,7 +85,7 @@ class GuidanceStateMachine {
     
     private(set) var currentState: GuidanceState = .normal
     private var stateEnterTime: Date?
-    private let minStateDuration: TimeInterval = 0.2  // 最小状态持续时间，避免抖动
+    private let minStateDuration: TimeInterval = 0.5  // 增加到 0.5 秒，防止触觉因微小变化频繁震动
     
     // MARK: Initialization
     
@@ -136,38 +136,26 @@ class GuidanceStateMachine {
         sectorDepth: SectorDepth,
         quality: DepthQualityMetrics
     ) -> GuidanceState {
-        // 1. 优先检查质量
-        if !quality.isReliable {
-            return .lowConfidence
-        }
-        
-        let dL = sectorDepth.left
-        let dC = sectorDepth.center
-        let dR = sectorDepth.right
-        
-        // 2. 检查停止条件
-        if dC < thresholds.stopDistance {
+        // 1. 检查停止条件 (最高优先级)
+        if sectorDepth.center < thresholds.stopDistance {
             return .stop
         }
-        
-        // 3. 检查警告条件
-        if dC < thresholds.warnDistance {
+
+        // 2. 检查警告条件
+        if sectorDepth.center < thresholds.warnDistance {
             // 比较左右，决定方向
-            let leftClearance = dL - dR
+            let leftClearance = sectorDepth.left - sectorDepth.right
             
             if leftClearance > thresholds.hysteresis {
-                // 左边更空旷
                 return .warningLeft
             } else if leftClearance < -thresholds.hysteresis {
-                // 右边更空旷
                 return .warningRight
-            } else {
-                // 左右差不多，保持当前状态或返回 normal
-                if currentState == .warningLeft || currentState == .warningRight {
-                    return currentState
-                }
-                return .normal
             }
+        }
+        
+        // 3. 检查质量 (仅当没有紧迫障碍物时才报告低可靠)
+        if !quality.isReliable {
+            return .lowConfidence
         }
         
         // 4. 正常状态

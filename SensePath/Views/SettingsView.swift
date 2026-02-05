@@ -91,12 +91,21 @@ struct SettingsView: View {
                     
                     Toggle("记录日志", isOn: $settings.enableLogging)
                         .accessibilityLabel("记录日志")
-                        .accessibilityHint(settings.enableLogging ? "已开启，本地记录运行日志" : "已关闭")
+                        .accessibilityHint(settings.enableLogging ? "已开启，记录运行日志" : "已关闭")
+                    
+                    if settings.enableLogging {
+                        TextField("监控服务器 URL", text: $settings.remoteLogURL)
+                            .textFieldStyle(.roundedBorder)
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                            .keyboardType(.URL)
+                            .accessibilityLabel("记录日志服务器地址")
+                    }
                 } header: {
                     Text("调试选项")
                         .accessibilityAddTraits(.isHeader)
                 } footer: {
-                    Text("日志仅存储在设备本地，不会上传")
+                    Text("日志可以发送到 Mac 上的监控网页")
                 }
                 
                 // MARK: - 重置按钮

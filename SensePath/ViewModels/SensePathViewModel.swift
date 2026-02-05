@@ -68,16 +68,21 @@ class SensePathViewModel: ObservableObject {
             return
         }
         
+        // 重置 UI 状态以免残留旧数据
+        self.currentState = .normal
+        self.urgency = 0
+        self.heatmapImage = nil
+        
         do {
             // 启动触觉
             try hapticsManager.start()
             
-            // 启动采集
-            try captureManager.startCapture()
-            
-            // 重置状态
+            // 重置分析器和状态机
             analyzer.reset()
             stateMachine.reset()
+            
+            // 最后启动采集
+            try captureManager.startCapture()
             
             isRunning = true
             errorMessage = nil
@@ -86,10 +91,12 @@ class SensePathViewModel: ObservableObject {
             if settings.outputMode == .hapticSpeech {
                 speechManager.speak("避障已启动", priority: .normal)
             }
-            
         } catch {
             errorMessage = "启动失败: \(error.localizedDescription)"
             isRunning = false
+            // 失败时尝试回退停止
+            captureManager.stopCapture()
+            hapticsManager.stop()
         }
     }
     
@@ -164,18 +171,38 @@ class SensePathViewModel: ObservableObject {
     // MARK: - Processing Pipeline
     
     private func processFrame(depthData: AVDepthData, sampleBuffer: CMSampleBuffer) {
+        // 0. 统一深度格式为米制
+        let depthInMeters = depthData.depthDataType == kCVPixelFormatType_DepthFloat32 ? 
+            depthData.depthDataMap : 
+            depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32).depthDataMap
+
         // 1. 分析深度
         let (sectorDepth, quality) = analyzer.analyze(depthData: depthData, fps: captureManager.currentFPS)
         
         // 2. 更新状态机
         let guidance = stateMachine.update(sectorDepth: sectorDepth, quality: quality)
         
+        // 2.5 远程日志（如果是启用状态）
+        if settings.enableLogging {
+            RemoteLogger.shared.configure(url: settings.remoteLogURL)
+            let payload = RemoteLogPayload(
+                state: guidance.state.displayName,
+                left: sectorDepth.left,
+                center: sectorDepth.center,
+                right: sectorDepth.right,
+                invalidRatio: sectorDepth.invalidRatio,
+                stability: sectorDepth.stability,
+                fps: quality.fps
+            )
+            RemoteLogger.shared.log(payload: payload)
+        }
+        
         // 3. 渲染调试图（如果需要）
         var heatmap: UIImage? = nil
         var original: UIImage? = nil
         if settings.showMetrics {
             heatmap = heatmapRenderer.render(
-                depthBuffer: depthData.depthDataMap,
+                depthBuffer: depthInMeters,
                 minDistance: 0.5,
                 maxDistance: 4.0
             )
@@ -219,6 +246,11 @@ class SensePathViewModel: ObservableObject {
     // MARK: - Output Mapping
     
     private func mapToHapticPattern(state: GuidanceState, urgency: Float) -> HapticPattern {
+        // 增加静默域：如果紧迫度过低（障碍物较远），不触发触觉，避免过度敏感
+        if state != .stop && state != .lowConfidence && urgency < 0.2 {
+            return .none
+        }
+        
         switch state {
         case .warningLeft:
             return .directionLeft(urgency: urgency)
